@@ -52,11 +52,14 @@ from open_deep_research.utils import (
     think_tool,
 )
 
+from open_deep_research.debug_config import debug_node, print_tool_calls
+
 # Initialize a configurable model that we will use throughout the agent
 configurable_model = init_chat_model(
     configurable_fields=("model", "max_tokens", "api_key"),
 )
 
+@debug_node("clarify_with_user")
 async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
     """Analyze user messages and ask clarifying questions if the research scope is unclear.
     
@@ -114,7 +117,7 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
             update={"messages": [AIMessage(content=response.verification)]}
         )
 
-
+@debug_node("write_research_brief")
 async def write_research_brief(state: AgentState, config: RunnableConfig) -> Command[Literal["research_supervisor"]]:
     """Transform user messages into a structured research brief and initialize supervisor.
     
@@ -174,7 +177,7 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
         }
     )
 
-
+@debug_node("supervisor")
 async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[Literal["supervisor_tools"]]:
     """Lead research supervisor that plans research strategy and delegates to researchers.
     
@@ -222,6 +225,7 @@ async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[
         }
     )
 
+@debug_node("supervisor_tools")
 async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Command[Literal["supervisor", "__end__"]]:
     """Execute tools called by the supervisor, including research delegation and strategic thinking.
     
@@ -292,15 +296,29 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
             overflow_conduct_research_calls = conduct_research_calls[configurable.max_concurrent_research_units:]
             
             # Execute research tasks in parallel
-            research_tasks = [
-                researcher_subgraph.ainvoke({
-                    "researcher_messages": [
-                        HumanMessage(content=tool_call["args"]["research_topic"])
-                    ],
-                    "research_topic": tool_call["args"]["research_topic"]
-                }, config) 
-                for tool_call in allowed_conduct_research_calls
-            ]
+            import uuid
+            research_tasks = []
+            for tool_call in allowed_conduct_research_calls:
+                # 为每个 researcher_subgraph 调用(每次 invoke)生成唯一 ID
+                # E.g., researcher_3e4dd688
+                researcher_id = f"researcher_{uuid.uuid4().hex[:8]}"
+                # 创建包含唯一 ID 的配置
+                researcher_config = {
+                    **config,
+                    "configurable": {
+                        **config.get("configurable", {}),
+                        "researcher_id": researcher_id
+                    }
+                }
+                # 添加任务
+                research_tasks.append(
+                    researcher_subgraph.ainvoke({
+                        "researcher_messages": [
+                            HumanMessage(content=tool_call["args"]["research_topic"])
+                        ],
+                        "research_topic": tool_call["args"]["research_topic"]
+                    }, researcher_config)
+                )
             
             tool_results = await asyncio.gather(*research_tasks)
             
@@ -361,7 +379,10 @@ supervisor_builder.add_edge(START, "supervisor")  # Entry point to supervisor
 
 # Compile supervisor subgraph for use in main workflow
 supervisor_subgraph = supervisor_builder.compile()
+ss_graph_structure = supervisor_subgraph.get_graph()
+print(ss_graph_structure.draw_mermaid())
 
+@debug_node("researcher")
 async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[Literal["researcher_tools"]]:
     """Individual researcher that conducts focused research on specific topics.
     
@@ -414,6 +435,15 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
     messages = [SystemMessage(content=researcher_prompt)] + researcher_messages
     response = await research_model.ainvoke(messages)
     
+    # Debug: 打印工具调用信息
+    unique_id = None
+    if config:
+        configurable = config.get("configurable", {})
+        if configurable:
+            unique_id = configurable.get("researcher_id", "invalid")
+    if response.tool_calls:
+        print_tool_calls(response.tool_calls, unique_id)
+    
     # Step 4: Update state and proceed to tool execution
     return Command(
         goto="researcher_tools",
@@ -432,6 +462,7 @@ async def execute_tool_safely(tool, args, config):
         return f"Error executing tool: {str(e)}"
 
 
+@debug_node("researcher_tools")
 async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Command[Literal["researcher", "compress_research"]]:
     """Execute tools called by the researcher, including search tools and strategic thinking.
     
@@ -508,6 +539,7 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
         update={"researcher_messages": tool_outputs}
     )
 
+@debug_node("compress_research")
 async def compress_research(state: ResearcherState, config: RunnableConfig):
     """Compress and synthesize research findings into a concise, structured summary.
     
@@ -603,7 +635,10 @@ researcher_builder.add_edge("compress_research", END)      # Exit point after co
 
 # Compile researcher subgraph for parallel execution by supervisor
 researcher_subgraph = researcher_builder.compile()
+rs_graph_structure = researcher_subgraph.get_graph()
+print(rs_graph_structure.draw_mermaid())
 
+@debug_node("final_report_generation")
 async def final_report_generation(state: AgentState, config: RunnableConfig):
     """Generate the final comprehensive research report with retry logic for token limits.
     
@@ -717,3 +752,6 @@ deep_researcher_builder.add_edge("final_report_generation", END)                
 
 # Compile the complete deep researcher workflow
 deep_researcher = deep_researcher_builder.compile()
+
+dr_graph_structure = deep_researcher.get_graph()
+print(dr_graph_structure.draw_mermaid())
