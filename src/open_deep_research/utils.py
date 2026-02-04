@@ -84,7 +84,7 @@ async def tavily_search(
     
     # Initialize summarization model with retry logic
     summarization_model = init_model(
-        model=configurable.summarization_model,
+        model_name=configurable.summarization_model,
         max_tokens=configurable.summarization_model_max_tokens,
         api_key=get_api_key_for_model(configurable.summarization_model, config),
         base_url=get_base_url(config),

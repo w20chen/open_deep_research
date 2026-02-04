@@ -3,6 +3,7 @@
 import os
 from typing import Any, Dict, Optional
 from functools import wraps
+import datetime
 
 
 class DebugConfig:
@@ -22,6 +23,50 @@ class DebugConfig:
     DEBUG_STATE_TRANSITION = True
     DEBUG_LLM_CALLS = True
     DEBUG_TOOL_CALLS = True
+    
+    # 日志文件相关
+    _log_file_path = None
+    _log_file = None
+    
+    @classmethod
+    def _init_log_file(cls):
+        """初始化日志文件"""
+        if cls._log_file is None:
+            # 创建 logs 目录
+            log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "logs")
+            os.makedirs(log_dir, exist_ok=True)
+            
+            # 生成基于开始运行时间的文件名
+            start_time = datetime.datetime.now()
+            log_filename = f"debug_{start_time.strftime('%Y%m%d_%H%M%S')}.log"
+            cls._log_file_path = os.path.join(log_dir, log_filename)
+            
+            # 打开日志文件
+            cls._log_file = open(cls._log_file_path, "a", encoding="utf-8")
+            
+            # 写入日志文件头
+            cls._write_log(f"[DEBUG] 日志文件创建于: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    @classmethod
+    def _write_log(cls, message: str):
+        """写入日志信息"""
+        cls._init_log_file()
+        if cls._log_file:
+            cls._log_file.write(message + "\n")
+            cls._log_file.flush()  # 立即刷新，确保信息被写入
+    
+    @classmethod
+    def get_log_file_path(cls) -> Optional[str]:
+        """获取日志文件路径"""
+        cls._init_log_file()
+        return cls._log_file_path
+    
+    @classmethod
+    def close_log_file(cls):
+        """关闭日志文件"""
+        if cls._log_file:
+            cls._log_file.close()
+            cls._log_file = None
     
     @classmethod
     def is_debug_enabled(cls) -> bool:
@@ -75,37 +120,54 @@ def debug_node(node_name: str):
             
             # 打印节点开始信息
             if DebugConfig.should_print_node_start():
-                print(f"\n{'='*70}")
-                print(f"[DEBUG] node start: {node_name}")
-                if unique_id:
-                    print(f"[DEBUG] node id: {unique_id}")
-                else:
-                    print(f"[DEBUG] node id: invalid")
-                print(f"[DEBUG] timestamp: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                # print(f"[DEBUG] 状态键: {list(state.keys())}")
-                print(f"{'='*70}")
+                timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                start_messages = [
+                    f"{'='*70}",
+                    f"[DEBUG] node start: {node_name}",
+                    f"[DEBUG] node id: {unique_id if unique_id else 'invalid'}",
+                    f"[DEBUG] timestamp: {timestamp}",
+                    f"{'='*70}"
+                ]
+                
+                # 输出到控制台
+                for msg in start_messages:
+                    print(f"\n{msg}")
+                
+                # 写入日志文件
+                for msg in start_messages:
+                    DebugConfig._write_log(msg)
             
             # 执行节点函数
             result = await func(state, config)
             
             # 打印节点结束信息
             if DebugConfig.should_print_node_end():
-                print(f"\n{'='*70}")
-                print(f"[DEBUG] node complete: {node_name}")
-                if unique_id:
-                    print(f"[DEBUG] node id: {unique_id}")
-                print(f"[DEBUG] timestamp: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
+                timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                end_messages = [
+                    f"{'='*70}",
+                    f"[DEBUG] node complete: {node_name}",
+                    f"[DEBUG] node id: {unique_id if unique_id else 'invalid'}",
+                    f"[DEBUG] timestamp: {timestamp}"
+                ]
+                
                 try:
                     if hasattr(result, 'goto'):
-                        print(f"[DEBUG] next node: {result.goto}")
+                        end_messages.append(f"[DEBUG] next node: {result.goto}")
                     # if hasattr(result, 'update'):
                     #     update_keys = list(result.update.keys()) if result.update else []
-                    #     print(f"[DEBUG] 更新的状态键: {update_keys}")
+                    #     end_messages.append(f"[DEBUG] 更新的状态键: {update_keys}")
                 except:
                     pass
-
-                print(f"{'='*70}")
+                
+                end_messages.append(f"{'='*70}")
+                
+                # 输出到控制台
+                for msg in end_messages:
+                    print(f"\n{msg}")
+                
+                # 写入日志文件
+                for msg in end_messages:
+                    DebugConfig._write_log(msg)
             
             return result
         return wrapper
@@ -131,8 +193,14 @@ def print_debug(message: str, category: str = "INFO"):
     }
     
     icon = icons.get(category, "ℹ️")
-    timestamp = __import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    print(f"\n[{timestamp}] {icon} [{category}] {message}")
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    log_message = f"[{timestamp}] {icon} [{category}] {message}"
+    
+    # 输出到控制台
+    print(f"\n{log_message}")
+    
+    # 写入日志文件
+    DebugConfig._write_log(log_message)
 
 
 def print_state_summary(state: dict, title: str = "状态摘要"):
@@ -145,21 +213,31 @@ def print_state_summary(state: dict, title: str = "状态摘要"):
     if not DebugConfig.is_debug_enabled():
         return
     
-    print(f"\n{'='*70}")
-    print(f"[DEBUG] {title}")
-    print(f"{'='*70}")
+    summary_messages = [
+        f"{'='*70}",
+        f"[DEBUG] {title}",
+        f"{'='*70}"
+    ]
     
     for key, value in state.items():
         if isinstance(value, list):
-            print(f"  {key}: list with {len(value)} items")
+            summary_messages.append(f"  {key}: list with {len(value)} items")
         elif isinstance(value, dict):
-            print(f"  {key}: dict with {len(value)} keys")
+            summary_messages.append(f"  {key}: dict with {len(value)} keys")
         elif isinstance(value, str) and len(value) > 100:
-            print(f"  {key}: {value[:100]}...")
+            summary_messages.append(f"  {key}: {value[:100]}...")
         else:
-            print(f"  {key}: {value}")
+            summary_messages.append(f"  {key}: {value}")
     
-    print(f"{'='*70}")
+    summary_messages.append(f"{'='*70}")
+    
+    # 输出到控制台
+    for msg in summary_messages:
+        print(f"\n{msg}")
+    
+    # 写入日志文件
+    for msg in summary_messages:
+        DebugConfig._write_log(msg)
 
 
 def print_tool_calls(tool_calls, unique_id=None):
@@ -172,32 +250,33 @@ def print_tool_calls(tool_calls, unique_id=None):
     if not DebugConfig.is_debug_enabled() or not tool_calls:
         return
 
-    print(f"\n{'='*70}")
-    print(f"[DEBUG] tool call")
-    if unique_id:
-        print(f"[DEBUG] node id: {unique_id}")
-    print(f"[DEBUG] timestamp: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"[DEBUG] #tools: {len(tool_calls)}")
-
-    # for i, tool_call in enumerate(tool_calls, 1):
-    #     tool_name = tool_call.get("name", "unknown")
-    #     tool_id = tool_call.get("id", "unknown")
-    #     tool_args = tool_call.get("args", {})
-
-    #     print(f"\n[DEBUG] 工具 #{i}:")
-    #     print(f"  名称: {tool_name}")
-    #     print(f"  ID: {tool_id}")
-    #     print(f"  参数:")
-
-    #     for key, value in tool_args.items():
-    #         if isinstance(value, str) and len(value) > 150:
-    #             print(f"    {key}: {value[:150]}...")
-    #         else:
-    #             print(f"    {key}: {value}")
-
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    tool_messages = [
+        f"{'='*70}",
+        f"[DEBUG] tool call",
+        f"[DEBUG] node id: {unique_id}" if unique_id else None,
+        f"[DEBUG] timestamp: {timestamp}",
+        f"[DEBUG] #tools: {len(tool_calls)}"
+    ]
+    
+    # 过滤掉 None 值
+    tool_messages = [msg for msg in tool_messages if msg is not None]
+    
+    # 添加工具名称
+    tool_names = []
     for tool_call in tool_calls:
         tool_name = tool_call.get("name", "unknown")
-        print(f"{tool_name} ", end=' ')
-
-    print("")
-    print(f"{'='*70}")
+        tool_names.append(tool_name)
+    tool_messages.append(" ".join(tool_names))
+    tool_messages.append(f"{'='*70}")
+    
+    # 输出到控制台
+    for msg in tool_messages:
+        if msg == tool_messages[-2]:  # 工具名称行
+            print(f"{msg} ")
+        else:
+            print(f"\n{msg}")
+    
+    # 写入日志文件
+    for msg in tool_messages:
+        DebugConfig._write_log(msg)
