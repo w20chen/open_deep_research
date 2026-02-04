@@ -265,16 +265,22 @@ async def arxiv_search_async(
             for doc in docs:
                 # Extract metadata
                 metadata = doc.metadata
+
+                # print(metadata)
+                # {'Entry ID': 'http://arxiv.org/abs/2501.05032v2', 
+                # 'Published': datetime.date(2026, 2, 1), 
+                # 'Title': 'Enhancing Human-Like Responses in Large Language Models', 
+                # 'Authors': 'Ethem Yağız Çalık, Talha Rüzgar Akkuş'}
                 
                 # Use entry_id as the URL (this is the actual arxiv link)
-                url = metadata.get('entry_id', '')
+                url = metadata.get('Entry ID', '')
                 
                 # Format content with all useful metadata
                 content_parts = []
 
                 # Primary information
-                if 'Summary' in metadata:
-                    content_parts.append(f"Summary: {metadata['Summary']}")
+                if doc.page_content:
+                    content_parts.append(f"Summary: {doc.page_content}")
 
                 if 'Authors' in metadata:
                     content_parts.append(f"Authors: {metadata['Authors']}")
