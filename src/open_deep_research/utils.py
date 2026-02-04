@@ -25,6 +25,7 @@ from langchain_core.tools import (
     ToolException,
     tool,
 )
+from langchain_community.retrievers import ArxivRetriever
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.config import get_store
 from mcp import McpError
@@ -142,6 +143,53 @@ async def tavily_search(
     
     return formatted_output
 
+ARXIV_SEARCH_DESCRIPTION = (
+    "A search engine for academic papers on arXiv. "
+    "Useful for when you need to find research papers and their abstracts."
+)
+@tool(description=ARXIV_SEARCH_DESCRIPTION)
+async def arxiv_search(
+    queries: List[str],
+    max_results: Annotated[int, InjectedToolArg] = 5,
+    config: RunnableConfig = None
+) -> str:
+    """Fetch and summarize search results from arXiv.
+
+    Args:
+        queries: List of search queries to execute
+        max_results: Maximum number of results to return per query (there are multiple queries)
+        config: Runtime configuration (not used for arXiv)
+
+    Returns:
+        Formatted string containing summarized search results
+    """
+    # Step 1: Execute search queries asynchronously
+    search_results = await arxiv_search_async(
+        queries,
+        load_max_docs=max_results
+    )
+    
+    # Step 2: Deduplicate results by URL to avoid processing the same content multiple times
+    unique_results = {}
+    for response in search_results:
+        for result in response['results']:
+            url = result['url']
+            if url not in unique_results:
+                unique_results[url] = {**result, "query": response['query']}
+    
+    # Step 3: Format the final output
+    if not unique_results:
+        return "No valid arXiv search results found. Please try different search queries."
+    
+    formatted_output = "arXiv search results: \n\n"
+    for i, (url, result) in enumerate(unique_results.items()):
+        formatted_output += f"\n\n--- SOURCE {i+1}: {result['title']} ---\n"
+        formatted_output += f"URL: {url}\n\n"
+        formatted_output += f"SUMMARY:\n{result['content']}\n\n"
+        formatted_output += "\n\n" + "-" * 80 + "\n"
+    
+    return formatted_output
+
 async def tavily_search_async(
     search_queries, 
     max_results: int = 5, 
@@ -178,6 +226,142 @@ async def tavily_search_async(
     # Execute all search queries in parallel and return results
     search_results = await asyncio.gather(*search_tasks)
     return search_results
+
+async def arxiv_search_async(
+    search_queries, 
+    load_max_docs: int = 5, 
+    get_full_documents: bool = False, 
+    load_all_available_meta: bool = True
+):
+    """Execute multiple arXiv search queries asynchronously.
+    https://docs.langchain.com/oss/python/integrations/retrievers/arxiv
+    
+    Args:
+        search_queries: List of search query strings to execute
+        load_max_docs: Maximum number of documents to return per query
+        get_full_documents: Whether to fetch full text of documents
+        load_all_available_meta: Whether to load all available metadata
+        
+    Returns:
+        List of search result dictionaries from arXiv API
+    """
+    
+    async def process_single_query(query):
+        try:
+            # Create retriever for each query
+            retriever = ArxivRetriever(
+                load_max_docs=load_max_docs,
+                get_full_documents=get_full_documents,
+                load_all_available_meta=load_all_available_meta
+            )
+            
+            # Run the synchronous retriever in a thread pool
+            loop = asyncio.get_event_loop()
+            # ArxivRetriever 可以直接 query 一个字符串
+            docs = await loop.run_in_executor(None, lambda: retriever.invoke(query))
+            
+            results = []
+            
+            for doc in docs:
+                # Extract metadata
+                metadata = doc.metadata
+                
+                # Use entry_id as the URL (this is the actual arxiv link)
+                url = metadata.get('entry_id', '')
+                
+                # Format content with all useful metadata
+                content_parts = []
+
+                # Primary information
+                if 'Summary' in metadata:
+                    content_parts.append(f"Summary: {metadata['Summary']}")
+
+                if 'Authors' in metadata:
+                    content_parts.append(f"Authors: {metadata['Authors']}")
+
+                # Add publication information
+                published = metadata.get('Published')
+                published_str = published.isoformat() if hasattr(published, 'isoformat') else str(published) if published else ''
+                if published_str:
+                    content_parts.append(f"Published: {published_str}")
+
+                # Add additional metadata if available
+                if 'primary_category' in metadata:
+                    content_parts.append(f"Primary Category: {metadata['primary_category']}")
+
+                if 'categories' in metadata and metadata['categories']:
+                    content_parts.append(f"Categories: {', '.join(metadata['categories'])}")
+
+                if 'comment' in metadata and metadata['comment']:
+                    content_parts.append(f"Comment: {metadata['comment']}")
+
+                if 'journal_ref' in metadata and metadata['journal_ref']:
+                    content_parts.append(f"Journal Reference: {metadata['journal_ref']}")
+
+                if 'doi' in metadata and metadata['doi']:
+                    content_parts.append(f"DOI: {metadata['doi']}")
+
+                # Get PDF link if available in the links
+                pdf_link = ""
+                if 'links' in metadata and metadata['links']:
+                    for link in metadata['links']:
+                        if 'pdf' in link:
+                            pdf_link = link
+                            content_parts.append(f"PDF: {pdf_link}")
+                            break
+
+                # Join all content parts with newlines 
+                content = "\n".join(content_parts)
+
+                result = {
+                    'title': metadata.get('Title', ''),
+                    'url': url,  # Using entry_id as the URL
+                    'content': content
+                }
+                results.append(result)
+                
+            return {
+                'query': query,
+                'follow_up_questions': None,
+                'answer': None,
+                'images': [],
+                'results': results
+            }
+        except Exception as e:
+            # Handle exceptions gracefully
+            print(f"Error processing arXiv query '{query}': {str(e)}")
+            return {
+                'query': query,
+                'follow_up_questions': None,
+                'answer': None,
+                'images': [],
+                'results': [],
+                'error': str(e)
+            }
+    
+    # Process queries sequentially with delay to respect arXiv rate limit (1 request per 3 seconds)
+    search_docs = []
+    for i, query in enumerate(search_queries):
+        try:
+            # # Add delay between requests (3 seconds per ArXiv's rate limit)
+            # if i > 0:  # Don't delay the first request
+            #     await asyncio.sleep(3.0)
+            
+            result = await process_single_query(query)
+            search_docs.append(result)
+        except Exception as e:
+            # Handle exceptions gracefully
+            print(f"Error processing arXiv query '{query}': {str(e)}")
+            search_docs.append({
+                'query': query,
+                'follow_up_questions': None,
+                'answer': None,
+                'images': [],
+                'results': [],
+                'error': str(e)
+            })
+            
+    return search_docs
 
 async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
     """Summarize webpage content using AI model with timeout protection.
@@ -559,6 +743,16 @@ async def get_search_tool(search_api: SearchAPI):
     elif search_api == SearchAPI.TAVILY:
         # Configure Tavily search tool with metadata
         search_tool = tavily_search
+        search_tool.metadata = {
+            **(search_tool.metadata or {}), 
+            "type": "search", 
+            "name": "web_search"
+        }
+        return [search_tool]
+        
+    elif search_api == SearchAPI.ARXIV:
+        # Configure arXiv search tool with metadata
+        search_tool = arxiv_search
         search_tool.metadata = {
             **(search_tool.metadata or {}), 
             "type": "search", 

@@ -322,6 +322,9 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
     ]
     
     for tool_call in think_tool_calls:
+        # 这里跑挂过一次：前一步 supervisor 调用 think_tool，可是其 output 为空字符串
+        # 可能是因为上下文过长，或者是 ollama 的问题
+        # 也可能是因为当时 research_model 用的是 qwen2.5:14b-instruct，能力较弱
         reflection_content = tool_call["args"]["reflection"]
         all_tool_messages.append(ToolMessage(
             content=f"Reflection recorded: {reflection_content}",

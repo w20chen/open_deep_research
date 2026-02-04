@@ -1,5 +1,8 @@
 ollama serve
+
 环境变量： export BASE_URL=http://127.0.0.1:11434
+
+能力较弱的模型可能不能输出结构化的 JSON 数据，或不能调用正确的工具。
 
 # 🔬 Open Deep Research
 
