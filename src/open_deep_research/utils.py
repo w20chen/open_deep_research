@@ -9,6 +9,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional
 
 import aiohttp
 from langchain.chat_models import init_chat_model
+from langchain_ollama import ChatOllama
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
@@ -82,15 +83,21 @@ async def tavily_search(
     max_char_to_include = configurable.max_content_length
     
     # Initialize summarization model with retry logic
-    model_api_key = get_api_key_for_model(configurable.summarization_model, config)
-    summarization_model = init_chat_model(
+    summarization_model = init_model(
         model=configurable.summarization_model,
         max_tokens=configurable.summarization_model_max_tokens,
-        api_key=model_api_key,
+        api_key=get_api_key_for_model(configurable.summarization_model, config),
+        base_url=get_base_url(config),
         tags=["langsmith:nostream"]
-    ).with_structured_output(Summary).with_retry(
-        stop_after_attempt=configurable.max_structured_output_retries
     )
+    if is_ollama_model(configurable.summarization_model):
+        summarization_model = summarization_model.with_structured_output(Summary, method="json_schema").with_retry(
+            stop_after_attempt=configurable.max_structured_output_retries
+        )
+    else:
+        summarization_model = summarization_model.with_structured_output(Summary).with_retry(
+            stop_after_attempt=configurable.max_structured_output_retries
+        )
     
     # Step 4: Create summarization tasks (skip empty content)
     async def noop():
@@ -893,6 +900,8 @@ def get_api_key_for_model(model_name: str, config: RunnableConfig):
     """Get API key for a specific model from environment or config."""
     should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")
     model_name = model_name.lower()
+    if is_ollama_model(model_name):
+        return None
     if should_get_from_config.lower() == "true":
         api_keys = config.get("configurable", {}).get("apiKeys", {})
         if not api_keys:
@@ -916,6 +925,42 @@ def get_api_key_for_model(model_name: str, config: RunnableConfig):
         elif model_name.startswith("deepseek"):
             return os.getenv("DEEPSEEK_API_KEY")
         return None
+
+def is_ollama_model(model_name: str) -> bool:
+    """Check if the model is an Ollama model."""
+    return model_name.lower().startswith("ollama:")
+
+def get_model_name(model_name: str) -> str:
+    """Extract the actual model name from the provider:model format."""
+    if ":" in model_name:
+        return model_name.split(":", 1)[1]
+    return model_name
+
+def init_model(model_name: str, max_tokens: int, api_key: Optional[str] = None, base_url: Optional[str] = None, tags: Optional[List[str]] = None):
+    """Initialize a model based on the model name."""
+    if is_ollama_model(model_name):
+        actual_model_name = get_model_name(model_name)
+        return ChatOllama(
+            model=actual_model_name,
+            base_url=base_url or "http://127.0.0.1:11434",
+            num_predict=max_tokens,
+        )
+    else:
+        return init_chat_model(
+            model=model_name,
+            max_tokens=max_tokens,
+            api_key=api_key,
+            base_url=base_url,
+            tags=tags or []
+        )
+
+def get_base_url(config: RunnableConfig):
+    """Get base URL for custom model endpoints from environment or config."""
+    should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")
+    if should_get_from_config.lower() == "true":
+        return config.get("configurable", {}).get("base_url")
+    else:
+        return os.getenv("BASE_URL")
 
 def get_tavily_api_key(config: RunnableConfig):
     """Get Tavily API key from environment or config."""

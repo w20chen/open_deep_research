@@ -210,6 +210,16 @@ class Configuration(BaseModel):
             }
         }
     )
+    base_url: Optional[str] = Field(
+        default=None,
+        optional=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "description": "Base URL for custom model endpoints (e.g., http://127.0.0.1:11434 for Ollama)"
+            }
+        }
+    )
     # MCP server configuration
     mcp_config: Optional[MCPConfig] = Field(
         default=None,

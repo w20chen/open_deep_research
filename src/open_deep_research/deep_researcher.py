@@ -4,6 +4,7 @@ import asyncio
 from typing import Literal
 
 from langchain.chat_models import init_chat_model
+from langchain_ollama import ChatOllama
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
@@ -43,6 +44,10 @@ from open_deep_research.utils import (
     anthropic_websearch_called,
     get_all_tools,
     get_api_key_for_model,
+    get_base_url,
+    get_model_name,
+    init_model,
+    is_ollama_model,
     get_model_token_limit,
     get_notes_from_tool_calls,
     get_today_str,
@@ -56,8 +61,22 @@ from open_deep_research.debug_config import debug_node, print_tool_calls
 
 # Initialize a configurable model that we will use throughout the agent
 configurable_model = init_chat_model(
-    configurable_fields=("model", "max_tokens", "api_key"),
+    configurable_fields=("model", "max_tokens", "api_key", "base_url"),
 )
+
+def get_configurable_model(config: RunnableConfig):
+    """Get a configurable model based on the configuration."""
+    configurable = Configuration.from_runnable_config(config)
+    model_name = configurable.research_model
+    
+    if is_ollama_model(model_name):
+        actual_model_name = get_model_name(model_name)
+        return ChatOllama(
+            model=actual_model_name,
+            base_url=get_base_url(config) or "http://127.0.0.1:11434",
+        )
+    else:
+        return configurable_model
 
 @debug_node("clarify_with_user")
 async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
@@ -85,16 +104,25 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         "model": configurable.research_model,
         "max_tokens": configurable.research_model_max_tokens,
         "api_key": get_api_key_for_model(configurable.research_model, config),
+        "base_url": get_base_url(config),
         "tags": ["langsmith:nostream"]
     }
     
     # Configure model with structured output and retry logic
-    clarification_model = (
-        configurable_model
-        .with_structured_output(ClarifyWithUser)
-        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-        .with_config(model_config)
-    )
+    model_instance = get_configurable_model(config)
+    if is_ollama_model(configurable.research_model):
+        clarification_model = (
+            model_instance
+            .with_structured_output(ClarifyWithUser, method="json_schema")
+            .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+        )
+    else:
+        clarification_model = (
+            model_instance
+            .with_structured_output(ClarifyWithUser)
+            .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+            .with_config(model_config)
+        )
     
     # Step 3: Analyze whether clarification is needed
     prompt_content = clarify_with_user_instructions.format(
@@ -138,16 +166,25 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
         "model": configurable.research_model,
         "max_tokens": configurable.research_model_max_tokens,
         "api_key": get_api_key_for_model(configurable.research_model, config),
+        "base_url": get_base_url(config),
         "tags": ["langsmith:nostream"]
     }
     
     # Configure model for structured research question generation
-    research_model = (
-        configurable_model
-        .with_structured_output(ResearchQuestion)
-        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-        .with_config(research_model_config)
-    )
+    model_instance = get_configurable_model(config)
+    if is_ollama_model(configurable.research_model):
+        research_model = (
+            model_instance
+            .with_structured_output(ResearchQuestion, method="json_schema")
+            .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+        )
+    else:
+        research_model = (
+            model_instance
+            .with_structured_output(ResearchQuestion)
+            .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+            .with_config(research_model_config)
+        )
     
     # Step 2: Generate structured research brief from user messages
     prompt_content = transform_messages_into_research_topic_prompt.format(
@@ -198,6 +235,7 @@ async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[
         "model": configurable.research_model,
         "max_tokens": configurable.research_model_max_tokens,
         "api_key": get_api_key_for_model(configurable.research_model, config),
+        "base_url": get_base_url(config),
         "tags": ["langsmith:nostream"]
     }
     
@@ -205,12 +243,20 @@ async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[
     lead_researcher_tools = [ConductResearch, ResearchComplete, think_tool]
     
     # Configure model with tools, retry logic, and model settings
-    research_model = (
-        configurable_model
-        .bind_tools(lead_researcher_tools)
-        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-        .with_config(research_model_config)
-    )
+    model_instance = get_configurable_model(config)
+    if is_ollama_model(configurable.research_model):
+        research_model = (
+            model_instance
+            .bind_tools(lead_researcher_tools)
+            .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+        )
+    else:
+        research_model = (
+            model_instance
+            .bind_tools(lead_researcher_tools)
+            .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+            .with_config(research_model_config)
+        )
     
     # Step 2: Generate supervisor response based on current context
     supervisor_messages = state.get("supervisor_messages", [])
@@ -414,6 +460,7 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
         "model": configurable.research_model,
         "max_tokens": configurable.research_model_max_tokens,
         "api_key": get_api_key_for_model(configurable.research_model, config),
+        "base_url": get_base_url(config),
         "tags": ["langsmith:nostream"]
     }
     
@@ -424,12 +471,20 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
     )
     
     # Configure model with tools, retry logic, and settings
-    research_model = (
-        configurable_model
-        .bind_tools(tools)
-        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-        .with_config(research_model_config)
-    )
+    model_instance = get_configurable_model(config)
+    if is_ollama_model(configurable.research_model):
+        research_model = (
+            model_instance
+            .bind_tools(tools)
+            .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+        )
+    else:
+        research_model = (
+            model_instance
+            .bind_tools(tools)
+            .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+            .with_config(research_model_config)
+        )
     
     # Step 3: Generate researcher response with system context
     messages = [SystemMessage(content=researcher_prompt)] + researcher_messages
@@ -556,12 +611,20 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
     """
     # Step 1: Configure the compression model
     configurable = Configuration.from_runnable_config(config)
-    synthesizer_model = configurable_model.with_config({
-        "model": configurable.compression_model,
-        "max_tokens": configurable.compression_model_max_tokens,
-        "api_key": get_api_key_for_model(configurable.compression_model, config),
-        "tags": ["langsmith:nostream"]
-    })
+    if is_ollama_model(configurable.compression_model):
+        actual_model_name = get_model_name(configurable.compression_model)
+        synthesizer_model = ChatOllama(
+            model=actual_model_name,
+            base_url=get_base_url(config) or "http://127.0.0.1:11434",
+        )
+    else:
+        synthesizer_model = configurable_model.with_config({
+            "model": configurable.compression_model,
+            "max_tokens": configurable.compression_model_max_tokens,
+            "api_key": get_api_key_for_model(configurable.compression_model, config),
+            "base_url": get_base_url(config),
+            "tags": ["langsmith:nostream"]
+        })
     
     # Step 2: Prepare messages for compression
     researcher_messages = state.get("researcher_messages", [])
@@ -663,6 +726,7 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
         "model": configurable.final_report_model,
         "max_tokens": configurable.final_report_model_max_tokens,
         "api_key": get_api_key_for_model(configurable.final_report_model, config),
+        "base_url": get_base_url(config),
         "tags": ["langsmith:nostream"]
     }
     
@@ -682,7 +746,15 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
             )
             
             # Generate the final report
-            final_report = await configurable_model.with_config(writer_model_config).ainvoke([
+            if is_ollama_model(configurable.final_report_model):
+                actual_model_name = get_model_name(configurable.final_report_model)
+                final_report_model = ChatOllama(
+                    model=actual_model_name,
+                    base_url=get_base_url(config) or "http://127.0.0.1:11434",
+                )
+            else:
+                final_report_model = configurable_model.with_config(writer_model_config)
+            final_report = await final_report_model.ainvoke([
                 HumanMessage(content=final_report_prompt)
             ])
             
