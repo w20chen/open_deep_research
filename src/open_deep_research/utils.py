@@ -60,6 +60,9 @@ async def tavily_search(
     Returns:
         Formatted string containing summarized search results
     """
+
+    print("\033[33m" + "tavily_search called with queries:" + str(queries) + "\033[0m")
+
     # Step 1: Execute search queries asynchronously
     search_results = await tavily_search_async(
         queries,
@@ -163,6 +166,9 @@ async def arxiv_search(
     Returns:
         Formatted string containing summarized search results
     """
+
+    print("\033[33m" + "arxiv_search called with queries:" + str(queries) + "\033[0m")
+
     # Step 1: Execute search queries asynchronously
     search_results = await arxiv_search_async(
         queries,
@@ -1025,6 +1031,12 @@ MODEL_TOKEN_LIMITS = {
     "ollama:llama2:13b": 4096,
     "ollama:llama2": 4096,
     "ollama:mistral": 32768,
+    # vLLM / OpenAI-compatible local deployments (Qwen, etc.)
+    "openai:qwen/qwen2.5-4b-instruct": 32768,
+    "openai:qwen/qwen3.5-4b": 32768,
+    "openai:qwen2.5-4b-instruct": 32768,
+    "openai:qwen2.5-7b-instruct": 32768,
+    "openai:qwen2.5-14b-instruct": 32768,
     "bedrock:us.amazon.nova-premier-v1:0": 1000000,
     "bedrock:us.amazon.nova-pro-v1:0": 300000,
     "bedrock:us.amazon.nova-lite-v1:0": 300000,
@@ -1044,9 +1056,10 @@ def get_model_token_limit(model_string):
     Returns:
         Token limit as integer if found, None if model not in lookup table
     """
-    # Search through known model token limits
+    model_string_lower = model_string.lower() if model_string else ""
+    # Search through known model token limits (case-insensitive for flexibility)
     for model_key, token_limit in MODEL_TOKEN_LIMITS.items():
-        if model_key in model_string:
+        if model_key in model_string_lower:
             return token_limit
     
     # Model not found in lookup table
@@ -1097,34 +1110,47 @@ def get_config_value(value):
         return value.value
 
 def get_api_key_for_model(model_name: str, config: RunnableConfig):
-    """Get API key for a specific model from environment or config."""
+    """Get API key for a specific model from environment or config.
+    
+    For local OpenAI-compatible deployments (vLLM, etc.), returns 'dummy' when
+    base_url points to localhost and no API key is set - most local servers
+    accept any placeholder key.
+    """
     should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")
-    model_name = model_name.lower()
-    if is_ollama_model(model_name):
+    model_name_lower = model_name.lower()
+    if is_ollama_model(model_name_lower):
         return None
     if should_get_from_config.lower() == "true":
-        api_keys = config.get("configurable", {}).get("apiKeys", {})
+        api_keys = config.get("configurable", {}).get("apiKeys", {}) if config else {}
         if not api_keys:
-            return None
-        if model_name.startswith("openai:"):
-            return api_keys.get("OPENAI_API_KEY")
-        elif model_name.startswith("anthropic:"):
-            return api_keys.get("ANTHROPIC_API_KEY")
-        elif model_name.startswith("google"):
-            return api_keys.get("GOOGLE_API_KEY")
-        elif model_name.startswith("deepseek"):
-            return api_keys.get("DEEPSEEK_API_KEY")
-        return None
+            api_key = None
+        elif model_name_lower.startswith("openai:"):
+            api_key = api_keys.get("OPENAI_API_KEY")
+        elif model_name_lower.startswith("anthropic:"):
+            api_key = api_keys.get("ANTHROPIC_API_KEY")
+        elif model_name_lower.startswith("google"):
+            api_key = api_keys.get("GOOGLE_API_KEY")
+        elif model_name_lower.startswith("deepseek"):
+            api_key = api_keys.get("DEEPSEEK_API_KEY")
+        else:
+            api_key = None
     else:
-        if model_name.startswith("openai:"): 
-            return os.getenv("OPENAI_API_KEY")
-        elif model_name.startswith("anthropic:"):
-            return os.getenv("ANTHROPIC_API_KEY")
-        elif model_name.startswith("google"):
-            return os.getenv("GOOGLE_API_KEY")
-        elif model_name.startswith("deepseek"):
-            return os.getenv("DEEPSEEK_API_KEY")
-        return None
+        if model_name_lower.startswith("openai:"):
+            api_key = os.getenv("OPENAI_API_KEY")
+        elif model_name_lower.startswith("anthropic:"):
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+        elif model_name_lower.startswith("google"):
+            api_key = os.getenv("GOOGLE_API_KEY")
+        elif model_name_lower.startswith("deepseek"):
+            api_key = os.getenv("DEEPSEEK_API_KEY")
+        else:
+            api_key = None
+    # For local OpenAI-compatible servers (vLLM, etc.): use dummy key when none set
+    if api_key is None and model_name_lower.startswith("openai:"):
+        base_url = get_base_url(config) or ""
+        if "localhost" in base_url or "127.0.0.1" in base_url:
+            return "dummy"
+    return api_key
 
 def is_ollama_model(model_name: str) -> bool:
     """Check if the model is an Ollama model."""
@@ -1155,12 +1181,18 @@ def init_model(model_name: str, max_tokens: int, api_key: Optional[str] = None, 
         )
 
 def get_base_url(config: RunnableConfig):
-    """Get base URL for custom model endpoints from environment or config."""
-    should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")
-    if should_get_from_config.lower() == "true":
+    """Get base URL for custom model endpoints from environment or config.
+    
+    Priority: BASE_URL env var > configurable.base_url (e.g. from LangGraph Studio)
+    This supports vLLM, Ollama, and other OpenAI-compatible local deployments.
+    """
+    base_url = os.getenv("BASE_URL")
+    if base_url is not None:
+        return base_url
+    # Fallback to configurable (e.g. when using LangGraph Studio UI)
+    if config:
         return config.get("configurable", {}).get("base_url")
-    else:
-        return os.getenv("BASE_URL")
+    return None
 
 def get_tavily_api_key(config: RunnableConfig):
     """Get Tavily API key from environment or config."""

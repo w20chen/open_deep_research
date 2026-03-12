@@ -1,8 +1,22 @@
-ollama serve
-
-环境变量： export BASE_URL=http://127.0.0.1:11434
+### vLLM 本地部署 (如 Qwen3.5-4B)
 
 能力较弱的模型可能不能输出结构化的 JSON 数据，或不能调用正确的工具。
+
+1. 启动 vLLM 服务：
+```bash
+conda activate thunder
+
+python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.5-4B --host 127.0.0.1 --port 8000 --tool-call-parser qwen3_xml --enable-auto-tool-choice --enable-prefix-caching
+```
+
+2. 配置环境变量或 LangGraph Studio：
+```bash
+export BASE_URL=http://localhost:8000/v1
+```
+
+3. 在配置中将所有模型设为 `openai:Qwen/Qwen3.5-4B`
+
+4. 本地 vLLM 无需 API Key，代码会自动使用占位符
 
 # 🔬 Open Deep Research
 
@@ -43,7 +57,7 @@ uv pip install -r pyproject.toml
 
 3. Set up your `.env` file to customize the environment variables (for model selection, search tools, and other configuration settings):
 ```bash
-cp .env.example .env
+# cp .env.example .env
 ```
 
 4. Launch agent with the LangGraph server locally:
@@ -56,7 +70,7 @@ uvx --refresh --from "langgraph-cli[inmem]" --with-editable . --python 3.11 lang
 This will open the LangGraph Studio UI in your browser.
 
 ```
-- 🚀 API: http://127.0.0.1:2024
+- 🚀 API: http://127.0.0.1:2024 (ssh -L 2024:127.0.0.1:2024 weitian@202.120.39.3)
 - 🎨 Studio UI: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
 - 📚 API Docs: http://127.0.0.1:2024/docs
 ```
