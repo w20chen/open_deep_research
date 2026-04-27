@@ -59,6 +59,9 @@ logs/
 # Dependencies
 node_modules/
 
+# Traces & visualizations
+traces/
+
 # LangGraph specific
 .langgraph/
 

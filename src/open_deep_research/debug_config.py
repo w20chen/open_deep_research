@@ -4,25 +4,30 @@ import os
 from typing import Any, Dict, Optional
 from functools import wraps
 import datetime
+import json
+
+# Import tracing (lazy import to avoid circular dependencies)
+_trace_manager = None
+
+def _get_trace():
+    """Lazy import of trace module to avoid circular dependencies."""
+    global _trace_manager
+    if _trace_manager is None:
+        from open_deep_research.trace import get_trace_manager
+        _trace_manager = get_trace_manager()
+    return _trace_manager
 
 
 class DebugConfig:
     """调试配置类，通过环境变量控制调试输出"""
     
-    # # 从环境变量读取调试设置
-    # DEBUG_ENABLED = os.getenv("DEBUG_ENABLED", "false").lower() == "true"
-    # DEBUG_NODE_START = os.getenv("DEBUG_NODE_START", "true").lower() == "true"
-    # DEBUG_NODE_END = os.getenv("DEBUG_NODE_END", "true").lower() == "true"
-    # DEBUG_STATE_TRANSITION = os.getenv("DEBUG_STATE_TRANSITION", "true").lower() == "true"
-    # DEBUG_LLM_CALLS = os.getenv("DEBUG_LLM_CALLS", "true").lower() == "true"
-    # DEBUG_TOOL_CALLS = os.getenv("DEBUG_TOOL_CALLS", "true").lower() == "true"
-
     DEBUG_ENABLED = True
     DEBUG_NODE_START = True
     DEBUG_NODE_END = True
     DEBUG_STATE_TRANSITION = True
     DEBUG_LLM_CALLS = True
     DEBUG_TOOL_CALLS = True
+    TRACE_ENABLED = True  # Whether to record trace events
     
     # 日志文件相关
     _log_file_path = None
@@ -100,7 +105,7 @@ class DebugConfig:
 
 
 def debug_node(node_name: str):
-    """节点调试装饰器
+    """节点调试装饰器 - also records trace events.
     
     使用方法:
         @debug_node("my_node")
@@ -113,10 +118,37 @@ def debug_node(node_name: str):
             # 获取唯一标识
             # 在 config.configurable.researcher_id 中设置 unique_id，则会被记录
             unique_id = None
+            agent_type = "system"
             if config:
                 configurable = config.get("configurable", {})
                 if configurable:
                     unique_id = configurable.get("researcher_id", "invalid")
+            
+            # Determine agent type based on node name and researcher_id
+            if node_name in ("clarify_with_user", "write_research_brief"):
+                agent_type = "system"
+            elif node_name in ("supervisor", "supervisor_tools"):
+                agent_type = "supervisor"
+            elif node_name in ("researcher", "researcher_tools", "compress_research"):
+                agent_type = "researcher"
+            elif node_name == "final_report_generation":
+                agent_type = "report"
+            
+            # Record trace: node start
+            if DebugConfig.TRACE_ENABLED:
+                try:
+                    trace = _get_trace()
+                    trace.record_event(
+                        event_type="node_start",
+                        node_name=node_name,
+                        agent_type=agent_type,
+                        researcher_id=unique_id if unique_id and unique_id != "invalid" else None,
+                        details={
+                            "state_keys": list(state.keys()) if isinstance(state, dict) else [],
+                        }
+                    )
+                except Exception:
+                    pass  # Don't let tracing errors affect execution
             
             # 打印节点开始信息
             if DebugConfig.should_print_node_start():
@@ -140,6 +172,23 @@ def debug_node(node_name: str):
             # 执行节点函数
             result = await func(state, config)
             
+            # Record trace: node end
+            if DebugConfig.TRACE_ENABLED:
+                try:
+                    trace = _get_trace()
+                    end_details = {}
+                    if hasattr(result, 'goto'):
+                        end_details["next_node"] = result.goto
+                    trace.record_event(
+                        event_type="node_end",
+                        node_name=node_name,
+                        agent_type=agent_type,
+                        researcher_id=unique_id if unique_id and unique_id != "invalid" else None,
+                        details=end_details,
+                    )
+                except Exception:
+                    pass
+            
             # 打印节点结束信息
             if DebugConfig.should_print_node_end():
                 timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -153,9 +202,6 @@ def debug_node(node_name: str):
                 try:
                     if hasattr(result, 'goto'):
                         end_messages.append(f"[DEBUG] next node: {result.goto}")
-                    # if hasattr(result, 'update'):
-                    #     update_keys = list(result.update.keys()) if result.update else []
-                    #     end_messages.append(f"[DEBUG] 更新的状态键: {update_keys}")
                 except:
                     pass
                 

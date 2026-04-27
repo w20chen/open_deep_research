@@ -57,7 +57,9 @@ from open_deep_research.utils import (
     think_tool,
 )
 
-from open_deep_research.debug_config import debug_node, print_tool_calls
+from open_deep_research.debug_config import debug_node, print_tool_calls, DebugConfig
+from open_deep_research.trace import reset_trace, get_trace_manager
+from open_deep_research.resource_monitor import start_resource_monitoring, stop_resource_monitoring
 
 # Initialize a configurable model that we will use throughout the agent
 configurable_model = init_chat_model(
@@ -830,3 +832,102 @@ deep_researcher = deep_researcher_builder.compile()
 
 dr_graph_structure = deep_researcher.get_graph()
 print(dr_graph_structure.draw_mermaid())
+
+# ====== Trace & Resource Monitor Integration ======
+# These utilities wrap the compiled graph to automatically manage tracing
+# and resource monitoring during agent execution.
+
+def wrap_graph_with_tracing(graph):
+    """Wrap a compiled graph's ainvoke method with tracing and resource monitoring.
+    
+    After wrapping, calling graph.ainvoke() will automatically:
+    1. Reset and initialize the trace manager
+    2. Start resource usage monitoring
+    3. Run the graph
+    4. Stop monitoring and save the trace data to a JSON file
+    5. Generate an interactive HTML visualization
+    
+    Args:
+        graph: A compiled LangGraph StateGraph
+        
+    Returns:
+        The same graph with its ainvoke method wrapped
+    """
+    original_ainvoke = graph.ainvoke
+    
+    async def traced_ainvoke(input_data, config, **kwargs):
+        # Reset trace for new run
+        reset_trace()
+        
+        # Start resource monitoring
+        monitor = None
+        if DebugConfig.TRACE_ENABLED:
+            monitor = start_resource_monitoring()
+        
+        try:
+            result = await original_ainvoke(input_data, config, **kwargs)
+            return result
+        finally:
+            if DebugConfig.TRACE_ENABLED:
+                stop_resource_monitoring()
+                trace = get_trace_manager()
+                trace_path = trace.save_to_file()
+                print(f"[Trace] Saved trace to: {trace_path}")
+                # Generate visualizer HTML alongside the trace
+                try:
+                    from open_deep_research.trace_visualizer import generate_html
+                    html_path = generate_html(trace_path)
+                    print(f"[Trace] Visualization saved to: {html_path}")
+                except Exception as ve:
+                    print(f"[Trace] Could not generate visualization: {ve}")
+    
+    graph.ainvoke = traced_ainvoke
+    return graph
+
+
+async def run_with_tracing(graph, input_data, config, **kwargs):
+    """Run a graph with tracing and resource monitoring enabled.
+    
+    This is a convenience async function that automatically:
+    1. Resets the trace manager
+    2. Starts resource monitoring
+    3. Runs the graph
+    4. Stops monitoring and saves the trace
+    
+    Args:
+        graph: The compiled graph to run
+        input_data: Input data for the graph
+        config: Runtime configuration
+        **kwargs: Additional keyword arguments
+        
+    Returns:
+        The result from the graph execution
+    """
+    reset_trace()
+    
+    monitor = None
+    if DebugConfig.TRACE_ENABLED:
+        monitor = start_resource_monitoring()
+    
+    try:
+        result = await graph.ainvoke(input_data, config, **kwargs)
+        return result
+    finally:
+        if DebugConfig.TRACE_ENABLED:
+            stop_resource_monitoring()
+            trace = get_trace_manager()
+            trace_path = trace.save_to_file()
+            print(f"[Trace] Saved trace to: {trace_path}")
+            # Generate visualizer HTML alongside the trace
+            try:
+                from open_deep_research.trace_visualizer import generate_html
+                html_path = generate_html(trace_path)
+                print(f"[Trace] Visualization saved to: {html_path}")
+            except Exception as ve:
+                print(f"[Trace] Could not generate visualization: {ve}")
+
+
+# Apply tracing wrapper to the main compiled graph by default
+# ✅ Trace recording and visualization enabled!
+# After each run, check traces/ directory for .json (trace data) and .html (interactive visualization)
+deep_researcher = wrap_graph_with_tracing(deep_researcher)
