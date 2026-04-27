@@ -84,5 +84,5 @@ open_visualization("traces/trace_xxx.json")
 每个 researcher 子图调用时都会被分配唯一的 `researcher_id` (格式 `researcher_3e4dd688`)，该 ID 自动注入到 config 中。TraceManager 通过这个 ID 区分不同 researcher 的执行区间，甘特图中会单独成行显示。
 
 Trace: https://smith.langchain.com/public/514637ce-1bf4-4a18-86e3-d1415f13d5ab/r  
-traces/trace_20260428_025915_2035e8b7.html  
-traces/trace_20260428_025915_2035e8b7.json  
+trace_20260428_025915_2035e8b7.html  
+trace_20260428_025915_2035e8b7.json  
