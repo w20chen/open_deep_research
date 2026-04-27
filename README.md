@@ -51,6 +51,8 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv sync
 # or
 uv pip install -r pyproject.toml
+
+uv add "httpx[socks]"
 ```
 
 3. Set up your `.env` file to customize the environment variables (for model selection, search tools, and other configuration settings):
@@ -73,7 +75,7 @@ This will open the LangGraph Studio UI in your browser.
 - 📚 API Docs: http://127.0.0.1:2024/docs
 ```
 
-将本地端口和服务器（比如 202.120.39.3）的端口映射：ssh -L 2024:127.0.0.1:2024 username@202.120.39.3
+将本地端口和服务器（比如 202.120.39.13）的端口映射：ssh -p 17722 -L 2024:127.0.0.1:2024 username@202.120.39.13
 
 Ask a question in the `messages` input field and click `Submit`. Select different configuration in the "Manage Assistants" tab.
 
@@ -96,7 +98,7 @@ Open Deep Research supports a wide range of LLM providers via the [init_chat_mod
 
 Open Deep Research supports a wide range of search tools. By default it uses the [Tavily](https://www.tavily.com/) search API. Has full MCP compatibility and work native web search for Anthropic and OpenAI. See the `search_api` and `mcp_config` fields in the [configuration.py](https://github.com/langchain-ai/open_deep_research/blob/main/src/open_deep_research/configuration.py) file for more details. This can be accessed via the LangGraph Studio UI. 
 
-#### Other 
+#### Other
 
 See the fields in the [configuration.py](https://github.com/langchain-ai/open_deep_research/blob/main/src/open_deep_research/configuration.py) for various other settings to customize the behavior of Open Deep Research. 
 
@@ -123,7 +125,7 @@ python tests/extract_langsmith_data.py --project-name "YOUR_EXPERIMENT_NAME" --m
 
 This creates `tests/expt_results/deep_research_bench_model-name.jsonl` with the required format. Move the generated JSONL file to a local clone of the Deep Research Bench repository and follow their [Quick Start guide](https://github.com/Ayanami0730/deep_research_bench?tab=readme-ov-file#quick-start) for evaluation submission.
 
-#### Results 
+#### Results
 
 | Name | Commit | Summarization | Research | Compression | Total Cost | Total Tokens | RACE Score | Experiment |
 |------|--------|---------------|----------|-------------|------------|--------------|------------|------------|
@@ -162,7 +164,7 @@ The `src/legacy/` folder contains two earlier implementations that provide alter
 - **Interactive Control**: Allows feedback and approval of report plans
 - **Quality Focused**: Emphasizes accuracy through iterative refinement
 
-#### 2. Multi-Agent Implementation (`legacy/multi_agent.py`)  
+#### 2. Multi-Agent Implementation (`legacy/multi_agent.py`)
 - **Supervisor-Researcher Architecture**: Coordinated multi-agent system
 - **Parallel Processing**: Multiple researchers work simultaneously
 - **Speed Optimized**: Faster report generation through concurrency
