@@ -21,7 +21,7 @@ class ResourceMonitor:
     and records them into the active TraceManager.
     """
 
-    def __init__(self, interval: float = 1.0):
+    def __init__(self, interval: float = 0.1):
         """
         Args:
             interval: Sampling interval in seconds (default: 1.0)
@@ -131,7 +131,7 @@ class ResourceMonitor:
 _resource_monitor: Optional[ResourceMonitor] = None
 
 
-def start_resource_monitoring(interval: float = 1.0) -> ResourceMonitor:
+def start_resource_monitoring(interval: float = 0.1) -> ResourceMonitor:
     """Start the global resource monitor.
     
     Args:

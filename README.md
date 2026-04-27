@@ -51,8 +51,6 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv sync
 # or
 uv pip install -r pyproject.toml
-
-uv add "httpx[socks]"
 ```
 
 3. Set up your `.env` file to customize the environment variables (for model selection, search tools, and other configuration settings):

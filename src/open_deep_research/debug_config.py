@@ -7,15 +7,84 @@ import datetime
 import json
 
 # Import tracing (lazy import to avoid circular dependencies)
-_trace_manager = None
 
 def _get_trace():
-    """Lazy import of trace module to avoid circular dependencies."""
-    global _trace_manager
-    if _trace_manager is None:
+    """Get the current trace manager (no caching to avoid stale instances after reset)."""
+    from open_deep_research.trace import get_trace_manager
+    return get_trace_manager()
+
+
+# Module-level flag to prevent double tracing when wrap_graph_with_tracing and
+# the debug_node decorator both try to save the trace.
+_tracing_active = False
+
+
+def start_tracing():
+    """Initialize trace and start resource monitoring.
+    
+    Uses a module-level flag to ensure tracing is only initialized once per run,
+    preventing double-reset when wrap_graph_with_tracing (for direct Python calls)
+    and debug_node (for all invocation methods including langgraph-cli) are both active.
+    
+    Returns True if tracing was successfully started, False otherwise.
+    """
+    global _tracing_active
+    if not DebugConfig.TRACE_ENABLED:
+        return False
+    
+    if _tracing_active:
+        return True  # Already started
+    
+    try:
+        from open_deep_research.trace import reset_trace
+        reset_trace()
+        try:
+            from open_deep_research.resource_monitor import start_resource_monitoring
+            start_resource_monitoring()
+        except Exception:
+            pass  # Resource monitoring is optional
+        _tracing_active = True
+        return True
+    except Exception as e:
+        print(f"[Trace] Could not start tracing: {e}")
+        _tracing_active = True
+        return True  # Partial success
+
+
+def save_trace_and_visualize():
+    """Save trace data to JSON file and generate HTML visualization.
+    
+    Uses a module-level flag to ensure the save only happens once per run,
+    preventing double-save when wrap_graph_with_tracing and the debug_node
+    decorator both trigger.
+    """
+    global _tracing_active
+    if not DebugConfig.TRACE_ENABLED or not _tracing_active:
+        return
+    
+    _tracing_active = False  # Prevent double-save
+    
+    try:
+        from open_deep_research.resource_monitor import stop_resource_monitoring
+        stop_resource_monitoring()
+    except Exception:
+        pass  # Resource monitoring may not have started
+    
+    try:
         from open_deep_research.trace import get_trace_manager
-        _trace_manager = get_trace_manager()
-    return _trace_manager
+        trace = get_trace_manager()
+        trace_path = trace.save_to_file()
+        print(f"[Trace] Saved trace to: {trace_path}")
+        
+        # Generate visualizer HTML alongside the trace
+        try:
+            from open_deep_research.trace_visualizer import generate_html
+            html_path = generate_html(trace_path)
+            print(f"[Trace] Visualization saved to: {html_path}")
+        except Exception as ve:
+            print(f"[Trace] Could not generate visualization: {ve}")
+    except Exception as e:
+        print(f"[Trace] Error saving trace: {e}")
 
 
 class DebugConfig:
@@ -134,6 +203,13 @@ def debug_node(node_name: str):
             elif node_name == "final_report_generation":
                 agent_type = "report"
             
+            # Auto-start tracing on the first node that executes.
+            # IMPORTANT: This MUST be called BEFORE recording any trace events,
+            # because start_tracing() calls reset_trace() which creates a NEW
+            # TraceManager instance. If we record events first, they get recorded
+            # on the OLD instance and are lost when reset_trace() replaces it.
+            start_tracing()
+            
             # Record trace: node start
             if DebugConfig.TRACE_ENABLED:
                 try:
@@ -188,6 +264,29 @@ def debug_node(node_name: str):
                     )
                 except Exception:
                     pass
+            
+            # Auto-save trace when routing to __end__ (END) from a MAIN graph node.
+            # IMPORTANT: We must NOT trigger from subgraph nodes (supervisor_tools,
+            # researcher_tools, compress_research) because they also route to __end__
+            # when their subgraph completes — doing so would save a partial trace,
+            # set _tracing_active=False, and prevent the final complete save.
+            # Main graph nodes: clarify_with_user, write_research_brief, 
+            # research_supervisor, final_report_generation
+            main_graph_nodes = [
+                'clarify_with_user', 'write_research_brief', 'research_supervisor',
+                'final_report_generation'
+            ]
+            if node_name in main_graph_nodes:
+                should_save = False
+                if hasattr(result, 'goto') and result.goto == '__end__':
+                    should_save = True
+                # final_report_generation returns a plain dict (not a Command with goto),
+                # and its edge to __end__ is hardcoded in the graph definition.
+                # It is always the last main graph node, so we save when it completes.
+                if node_name == 'final_report_generation':
+                    should_save = True
+                if should_save:
+                    save_trace_and_visualize()
             
             # 打印节点结束信息
             if DebugConfig.should_print_node_end():
