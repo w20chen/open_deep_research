@@ -146,7 +146,8 @@ var resourceColors = {{
   cpu: '#60a5fa',
   mem: '#34d399',
   disk: '#f59e0b',
-  net: '#f472b6'
+  net: '#f472b6',
+  procCpu: '#fbbf24'
 }};
 
 function getBarColor(iv, groupKey) {{
@@ -169,7 +170,8 @@ function renderLegend() {{
     }}
   }});
   // Resource legend items
-  html += '<div class="legend-item"><div class="legend-color" style="background:' + resourceColors.cpu + '"></div>CPU</div>';
+  html += '<div class="legend-item"><div class="legend-color" style="background:' + resourceColors.cpu + '"></div>CPU (system)</div>';
+  html += '<div class="legend-item"><div class="legend-color" style="background:' + resourceColors.procCpu + '"></div>CPU (process)</div>';
   html += '<div class="legend-item"><div class="legend-color" style="background:' + resourceColors.mem + '"></div>Memory</div>';
   html += '<div class="legend-item"><div class="legend-color" style="background:' + resourceColors.disk + '"></div>Disk</div>';
   html += '<div class="legend-item"><div class="legend-color" style="background:' + resourceColors.net + '"></div>Network</div>';
@@ -185,9 +187,9 @@ var chartRefTime = null;
 var LABEL_W = 160;       // width for agent labels on the left
 var ROW_H = 28;          // height per agent row
 var RESOURCE_H = 80;     // height per resource chart
-var RESOURCE_GAP = 6;    // gap between resource charts
+var RESOURCE_GAP = 32;   // gap between resource charts (avoid y-axis label overlap)
 var X_TICK_H = 24;       // height for x-axis labels at bottom
-var Y_PAD = 8;           // padding between sections
+var Y_PAD = 16;          // padding between sections
 
 // Hit regions for Gantt bar clicks
 var ganttHitRegions = [];
@@ -246,7 +248,7 @@ function drawTimeline() {{
 
   var nAgentRows = orderedKeys.length;
   var hasResources = resourceUsage.length > 0;
-  var nResourceRows = hasResources ? 4 : 0;
+  var nResourceRows = hasResources ? 5 : 0;
 
   var chartW = availW - LABEL_W;
   if (chartW < 200) chartW = 200;
@@ -357,6 +359,7 @@ function drawTimeline() {{
 
     var resources = [
       {{ label: 'CPU (%)', key: 'cpu', field: function(r) {{ return (r.cpu && r.cpu.percent != null) ? r.cpu.percent : 0; }}, color: resourceColors.cpu }},
+      {{ label: 'Proc CPU (%)', key: 'procCpu', field: function(r) {{ return (r.cpu && r.cpu.process_percent != null) ? r.cpu.process_percent : 0; }}, color: resourceColors.procCpu }},
       {{ label: 'Memory (GB)', key: 'mem', field: function(r) {{ return (r.memory && r.memory.used_gb != null) ? r.memory.used_gb : 0; }}, color: resourceColors.mem }},
       {{ label: 'Disk (%)', key: 'disk', field: function(r) {{ return (r.disk && r.disk.percent != null) ? r.disk.percent : 0; }}, color: resourceColors.disk }},
       {{ label: 'Network (Mbps)', key: 'net', field: function(r) {{ return (r.network && r.network.recv_mbps != null) ? r.network.recv_mbps : 0; }}, color: resourceColors.net }}

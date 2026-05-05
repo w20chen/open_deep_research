@@ -58,18 +58,24 @@ class ResourceMonitor:
         prev_net = psutil.net_io_counters()
         prev_time = time.time()
 
+        # Per-process CPU measurement (this process only)
+        current_process = psutil.Process()
+
         while not self._stop_event.is_set():
             try:
-                # CPU
+                # CPU — system-wide
                 cpu_percent = psutil.cpu_percent(interval=None)
                 cpu_per_core = psutil.cpu_percent(interval=None, percpu=True)
+                # CPU — this Python process only
+                proc_cpu = current_process.cpu_percent(interval=None)
 
                 # RAM
                 mem = psutil.virtual_memory()
                 swap = psutil.swap_memory()
 
-                # Disk
-                disk = psutil.disk_usage(os.path.expanduser("~"))
+                # Disk — use the current working directory to reflect the
+                # actual disk where research data is being written.
+                disk = psutil.disk_usage(os.getcwd())
 
                 # Network (delta based)
                 curr_net = psutil.net_io_counters()
@@ -90,6 +96,7 @@ class ResourceMonitor:
                         "percent": cpu_percent,
                         "per_core": cpu_per_core,
                         "count": psutil.cpu_count(),
+                        "process_percent": proc_cpu,
                     },
                     "memory": {
                         "total_gb": mem.total / (1024**3),
