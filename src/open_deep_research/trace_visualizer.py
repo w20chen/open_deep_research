@@ -96,7 +96,18 @@ h2 {{ font-size: 1.2rem; margin-bottom: 12px; color: #94a3b8; }}
   </div>
 </div>
 
+<div class="section" id="tavilySection">
+  <div class="section-title" onclick="toggleSection('tavilyContent')">
+    <h2>🔎 Tavily Search Details (per query & sub-phase timing)</h2>
+    <span class="section-toggle" id="tavilyToggle">&#9660; collapse</span>
+  </div>
+  <div class="section-content" id="tavilyContent">
+    <div id="tavilyDetails"><p style="color:#64748b;text-align:center;padding:20px;">No tavily search data recorded.</p></div>
+  </div>
+</div>
+
 <div class="modal" id="detailModal">
+
   <div class="modal-content">
     <span class="modal-close" onclick="closeModal()">&times;</span>
     <h3 id="modalTitle">Details</h3>
@@ -564,12 +575,98 @@ document.getElementById('eventLog').addEventListener('click', function(e) {{
   }}
 }});
 
+function renderTavilyDetails() {{
+  var container = document.getElementById('tavilyDetails');
+  
+  // Filter intervals that are tavily sub-phases (tavily_api_search or tavily_summarization)
+  var tavilyIntervals = intervals.filter(function(iv) {{
+    return iv.node_name === 'tavily_api_search' || iv.node_name === 'tavily_summarization';
+  }});
+  
+  if (tavilyIntervals.length === 0) {{
+    container.innerHTML = '<p style="color:#64748b;text-align:center;padding:20px;">No tavily search data recorded.</p>';
+    return;
+  }}
+  
+  // Group tavily intervals by researcher_id, then by call_id (to pair api_search + summarization)
+  var groups = {{}};
+  tavilyIntervals.forEach(function(iv) {{
+    var rid = iv.researcher_id || 'unknown';
+    if (!groups[rid]) groups[rid] = {{}};
+    var callId = (iv.start_details && iv.start_details.call_id) || 'unknown';
+    if (!groups[rid][callId]) groups[rid][callId] = {{}};
+    groups[rid][callId][iv.node_name] = iv;
+  }});
+  
+  var html = '';
+  var researcherOrder = Object.keys(groups).sort();
+  
+  researcherOrder.forEach(function(rid) {{
+    var callIds = Object.keys(groups[rid]);
+    var displayRid = rid.startsWith('researcher_') ? rid.replace('researcher_', 'R:') : rid;
+    html += '<h3 style="color:#94a3b8;margin:16px 0 8px 0;">' + displayRid + ' (' + callIds.length + ' tavily search call(s))</h3>';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;margin-bottom:12px;">';
+    html += '<thead><tr style="background:#0f172a;">';
+    html += '<th style="padding:6px 10px;text-align:left;border-bottom:1px solid #334155;color:#94a3b8;">#</th>';
+    html += '<th style="padding:6px 10px;text-align:left;border-bottom:1px solid #334155;color:#94a3b8;">Queries</th>';
+    html += '<th style="padding:6px 10px;text-align:right;border-bottom:1px solid #334155;color:#94a3b8;">API Search</th>';
+    html += '<th style="padding:6px 10px;text-align:right;border-bottom:1px solid #334155;color:#94a3b8;">Summarization</th>';
+    html += '<th style="padding:6px 10px;text-align:right;border-bottom:1px solid #334155;color:#94a3b8;">Total</th>';
+    html += '<th style="padding:6px 10px;text-align:right;border-bottom:1px solid #334155;color:#94a3b8;">Results</th>';
+    html += '</tr></thead><tbody>';
+    
+    callIds.forEach(function(callId, idx) {{
+      var pair = groups[rid][callId];
+      var apiIv = pair['tavily_api_search'];
+      var summIv = pair['tavily_summarization'];
+      
+      var apiDur = apiIv ? apiIv.duration : null;
+      var summDur = summIv ? summIv.duration : null;
+      var totalDur = (apiDur || 0) + (summDur || 0);
+      
+      // Extract queries from start_details
+      var queriesStr = '';
+      if (apiIv && apiIv.start_details && apiIv.start_details.queries) {{
+        try {{
+          var queries = JSON.parse(apiIv.start_details.queries);
+          queriesStr = queries.join(', ');
+        }} catch(e) {{
+          queriesStr = apiIv.start_details.queries;
+        }}
+      }}
+      
+      // Extract num_results
+      var numResults = '';
+      if (apiIv && apiIv.end_details && apiIv.end_details.num_results != null) {{
+        numResults = apiIv.end_details.num_results;
+      }}
+      
+      var colorBar = idx % 2 === 0 ? '#1e293b' : 'transparent';
+      html += '<tr style="background:' + colorBar + ';">';
+      html += '<td style="padding:5px 10px;border-bottom:1px solid #0f172a;color:#64748b;">' + (idx + 1) + '</td>';
+      html += '<td style="padding:5px 10px;border-bottom:1px solid #0f172a;color:#e2e8f0;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + queriesStr.replace(/"/g, '"') + '">' + queriesStr + '</td>';
+      html += '<td style="padding:5px 10px;border-bottom:1px solid #0f172a;text-align:right;color:#f97316;">' + (apiDur != null ? apiDur.toFixed(2) + 's' : '-') + '</td>';
+      html += '<td style="padding:5px 10px;border-bottom:1px solid #0f172a;text-align:right;color:#fb923c;">' + (summDur != null ? summDur.toFixed(2) + 's' : '-') + '</td>';
+      html += '<td style="padding:5px 10px;border-bottom:1px solid #0f172a;text-align:right;color:#f59e0b;font-weight:bold;">' + totalDur.toFixed(2) + 's</td>';
+      html += '<td style="padding:5px 10px;border-bottom:1px solid #0f172a;text-align:right;color:#94a3b8;">' + numResults + '</td>';
+      html += '</tr>';
+    }});
+    
+    html += '</tbody></table>';
+  }});
+  
+  container.innerHTML = html;
+}}
+
+
 // Init
 drawTimeline();
 renderEventLog();
+renderTavilyDetails();
 </script>
 </body>
 </html>"""
+
 
 
 def generate_html(trace_filepath: str, output_filepath: Optional[str] = None) -> str:

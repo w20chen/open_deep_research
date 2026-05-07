@@ -64,6 +64,8 @@ async def tavily_search(
         Formatted string containing summarized search results
     """
 
+    import time as _time
+    _tavily_start = _time.time()
     print("\033[33m" + "tavily_search called with queries:" + str(queries) + "\033[0m")
 
     # Generate a unique call_id for this tavily_search invocation's sub-phases
@@ -99,7 +101,7 @@ async def tavily_search(
         except Exception:
             pass
 
-
+    _api_start = _time.time()
     # Step 1: Execute search queries asynchronously
     search_results = await tavily_search_async(
         queries,
@@ -108,6 +110,14 @@ async def tavily_search(
         include_raw_content=True,
         config=config
     )
+    _api_end = _time.time()
+
+    # Log each query with its API search time
+    rid_label = f"[{trace_researcher_id}]" if trace_researcher_id else ""
+    print(f"\033[36m[Trace]{rid_label} Tavily API search completed:")
+    for i, q in enumerate(queries):
+        print(f"  Query {i+1}: \"{q}\"")
+    print(f"  API search time: {_api_end - _api_start:.2f}s\033[0m")
 
     # Record trace: Tavily API search phase end
     if DebugConfig.TRACE_ENABLED:
@@ -122,6 +132,7 @@ async def tavily_search(
                     "call_id": search_call_id,
                     "phase": "tavily_api_call",
                     "num_results": sum(len(r.get('results', [])) for r in search_results),
+                    "api_duration": _api_end - _api_start,
                 }
             )
         except Exception:
@@ -152,6 +163,7 @@ async def tavily_search(
             )
         except Exception:
             pass
+
 
 
 
@@ -192,8 +204,15 @@ async def tavily_search(
         for result in unique_results.values()
     ]
     
+    _summ_start = _time.time()
     # Step 5: Execute all summarization tasks in parallel
     summaries = await asyncio.gather(*summarization_tasks)
+    _summ_end = _time.time()
+
+    # Log summarization time
+    print(f"\033[36m[Trace]{rid_label} Tavily summarization completed:")
+    print(f"  Summarization time: {_summ_end - _summ_start:.2f}s")
+    print(f"  Total tavily_search time: {_time.time() - _tavily_start:.2f}s\033[0m")
 
     # Record trace: Summarization phase end
     if DebugConfig.TRACE_ENABLED:
@@ -208,6 +227,7 @@ async def tavily_search(
                     "call_id": search_call_id,
                     "phase": "summarization",
                     "num_summaries": len([s for s in summaries if s is not None]),
+                    "summarization_duration": _summ_end - _summ_start,
                 }
             )
         except Exception:
@@ -216,6 +236,7 @@ async def tavily_search(
 
     
     # Step 6: Combine results with their summaries
+
     summarized_results = {
         url: {
             'title': result['title'], 
