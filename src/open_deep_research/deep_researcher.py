@@ -58,8 +58,9 @@ from open_deep_research.utils import (
 )
 
 from open_deep_research.debug_config import debug_node, print_tool_calls, DebugConfig, start_tracing, save_trace_and_visualize
-from open_deep_research.trace import reset_trace, get_trace_manager
+from open_deep_research.trace import reset_trace, get_trace_manager, TraceEvent
 from open_deep_research.resource_monitor import start_resource_monitoring, stop_resource_monitoring
+
 
 # Initialize a configurable model that we will use throughout the agent
 configurable_model = init_chat_model(
@@ -561,10 +562,67 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
         for tool in tools
     }
     
-    # Execute all tool calls in parallel
+    # Execute all tool calls in parallel with per-tool tracing
     tool_calls = most_recent_message.tool_calls
+    
+    # Get researcher_id for trace events
+    trace_researcher_id = None
+    if config:
+        cfg = config.get("configurable", {})
+        if cfg:
+            trace_researcher_id = cfg.get("researcher_id", None)
+    
+    # Record tool_call events and execute each tool with tracing
+    async def execute_tool_with_trace(tool_call):
+        import uuid
+        tool_name = tool_call["name"]
+        tool_instance = tools_by_name[tool_name]
+        # Generate a unique call_id to correctly pair tool_call and tool_result
+        # even when multiple identical tools run in parallel
+        call_id = str(uuid.uuid4())[:8]
+        
+        # Record tool_call start event
+        if DebugConfig.TRACE_ENABLED:
+            try:
+                trace = get_trace_manager()
+                trace.record_event(
+                    event_type="tool_call",
+                    node_name=tool_name,
+                    agent_type="researcher",
+                    researcher_id=trace_researcher_id,
+                    details={
+                        "call_id": call_id,
+                        "tool_args": str(tool_call.get("args", {})),
+                    }
+                )
+            except Exception:
+                pass
+        
+        # Execute the tool
+        observation = await execute_tool_safely(tool_instance, tool_call["args"], config)
+        
+        # Record tool_result end event
+        if DebugConfig.TRACE_ENABLED:
+            try:
+                trace = get_trace_manager()
+                trace.record_event(
+                    event_type="tool_result",
+                    node_name=tool_name,
+                    agent_type="researcher",
+                    researcher_id=trace_researcher_id,
+                    details={
+                        "call_id": call_id,
+                        "result_length": len(str(observation)),
+                    }
+                )
+            except Exception:
+                pass
+        
+        return observation
+
+    
     tool_execution_tasks = [
-        execute_tool_safely(tools_by_name[tool_call["name"]], tool_call["args"], config) 
+        execute_tool_with_trace(tool_call)
         for tool_call in tool_calls
     ]
     observations = await asyncio.gather(*tool_execution_tasks)
@@ -578,6 +636,7 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
         ) 
         for observation, tool_call in zip(observations, tool_calls)
     ]
+
     
     # Step 3: Check late exit conditions (after processing tools)
     exceeded_iterations = state.get("tool_call_iterations", 0) >= configurable.max_react_tool_calls

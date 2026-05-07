@@ -139,7 +139,15 @@ var phaseShades = {{
   'clarify_with_user': '#64748b',
   'write_research_brief': '#94a3b8',
   'research_supervisor': '#475569',
+  // Tool-level event colors (for tool_call/tool_result intervals)
+  'tavily_search': '#f59e0b',
+  'tavily_api_search': '#f97316',
+  'tavily_summarization': '#fb923c',
+  'think_tool': '#a78bfa',
+  'web_search': '#f59e0b',
+  'arxiv_search': '#14b8a6',
 }};
+
 
 // Resource line colors
 var resourceColors = {{
@@ -467,7 +475,8 @@ function renderEventLog() {{
   var html = '';
   events.forEach(function(ev) {{
     var dt = new Date(ev.timestamp * 1000).toISOString().substr(11, 12);
-    var typeIcon = ev.event_type === 'node_start' ? '&#9654;' : (ev.event_type === 'node_end' ? '&#9632;' : (ev.event_type === 'tool_call' ? '&#128295;' : '&#9679;'));
+    var typeIcon = ev.event_type === 'node_start' ? '&#9654;' : (ev.event_type === 'node_end' ? '&#9632;' : (ev.event_type === 'tool_call' ? '&#128295;' : (ev.event_type === 'tool_result' ? '&#9989;' : '&#9679;')));
+
     var detailStr = JSON.stringify(ev.details);
     if (detailStr.length > 80) detailStr = detailStr.substring(0, 80) + '...';
     var escaped = encodeURIComponent(JSON.stringify(ev));

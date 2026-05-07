@@ -99,29 +99,51 @@ class TraceManager:
         self.resource_data.append(data)
 
     def compute_execution_intervals(self) -> List[Dict[str, Any]]:
-        """Compute execution intervals from node_start/node_end events.
+        """Compute execution intervals from node_start/node_end and tool_call/tool_result events.
         
         Returns a list of intervals with: node_name, agent_type, researcher_id,
         start_time, end_time, duration, and all details.
         """
-        # Gather all node_start events
+        # Gather all start events (both node_start and tool_call)
         start_events: Dict[str, TraceEvent] = {}
         intervals: List[Dict[str, Any]] = []
 
         for event in self.events:
-            if event.event_type == "node_start":
-                key = f"{event.node_name}_{event.researcher_id or ''}_{event.id}"
+            if event.event_type in ("node_start", "tool_call"):
+                key = f"{event.event_type}_{event.node_name}_{event.researcher_id or ''}_{event.id}"
                 start_events[key] = event
-            elif event.event_type == "node_end":
+            elif event.event_type in ("node_end", "tool_result"):
                 # Match to the corresponding start event
-                # We use node_name + researcher_id as the matching key, 
-                # matching the most recent unmatched start
+                # node_end matches node_start, tool_result matches tool_call
+                expected_start_type = "node_start" if event.event_type == "node_end" else "tool_call"
+                
+                # For tool_call/tool_result pairs, try to match by call_id first
+                # (to correctly handle parallel execution of identical tools)
+                event_call_id = event.details.get("call_id") if event.details else None
+                
                 matched_key = None
-                for key in reversed(list(start_events.keys())):
-                    se = start_events[key]
-                    if se.node_name == event.node_name and se.researcher_id == event.researcher_id:
-                        matched_key = key
-                        break
+                if event_call_id and expected_start_type == "tool_call":
+                    # Try to match by call_id for parallel tool calls
+                    for key in reversed(list(start_events.keys())):
+                        se = start_events[key]
+                        se_call_id = se.details.get("call_id") if se.details else None
+                        if (se.event_type == expected_start_type and 
+                            se.node_name == event.node_name and 
+                            se.researcher_id == event.researcher_id and
+                            se_call_id == event_call_id):
+                            matched_key = key
+                            break
+                
+                # Fallback: match by (node_name, researcher_id) for node events
+                # or tool events without call_id
+                if matched_key is None:
+                    for key in reversed(list(start_events.keys())):
+                        se = start_events[key]
+                        if (se.event_type == expected_start_type and 
+                            se.node_name == event.node_name and 
+                            se.researcher_id == event.researcher_id):
+                            matched_key = key
+                            break
                 
                 if matched_key:
                     se = start_events.pop(matched_key)
@@ -134,10 +156,12 @@ class TraceManager:
                         "duration": event.timestamp - se.timestamp,
                         "start_details": se.details,
                         "end_details": event.details,
+                        "interval_type": se.event_type,  # "node_start" or "tool_call"
                     }
                     intervals.append(interval)
 
         return intervals
+
 
     def compute_agent_intervals(self) -> Dict[str, List[Dict[str, Any]]]:
         """Compute intervals grouped by agent (researcher_id or main agent type)."""

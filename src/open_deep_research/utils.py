@@ -34,6 +34,9 @@ from tavily import AsyncTavilyClient
 from open_deep_research.configuration import Configuration, SearchAPI
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import ResearchComplete, Summary
+from open_deep_research.debug_config import DebugConfig
+from open_deep_research.trace import get_trace_manager
+
 
 ##########################
 # Tavily Search Tool Utils
@@ -63,6 +66,40 @@ async def tavily_search(
 
     print("\033[33m" + "tavily_search called with queries:" + str(queries) + "\033[0m")
 
+    # Generate a unique call_id for this tavily_search invocation's sub-phases
+    # This ensures correct pairing even when multiple tavily_search calls run in parallel
+    import uuid
+    search_call_id = str(uuid.uuid4())[:8]
+
+    # Extract researcher_id from config so sub-phase trace events are correctly
+    # attributed to the right researcher (critical for parallel researcher visualization)
+    trace_researcher_id = None
+    if config:
+        cfg = config.get("configurable", {})
+        if cfg:
+            trace_researcher_id = cfg.get("researcher_id", None)
+
+    # Record trace: Tavily API search phase start
+    if DebugConfig.TRACE_ENABLED:
+        try:
+            trace = get_trace_manager()
+            trace.record_event(
+                event_type="tool_call",
+                node_name="tavily_api_search",
+                agent_type="researcher",
+                researcher_id=trace_researcher_id,
+                details={
+                    "call_id": search_call_id,
+                    "phase": "tavily_api_call",
+                    "queries": str(queries),
+                    "max_results": max_results,
+                    "topic": topic,
+                }
+            )
+        except Exception:
+            pass
+
+
     # Step 1: Execute search queries asynchronously
     search_results = await tavily_search_async(
         queries,
@@ -71,6 +108,24 @@ async def tavily_search(
         include_raw_content=True,
         config=config
     )
+
+    # Record trace: Tavily API search phase end
+    if DebugConfig.TRACE_ENABLED:
+        try:
+            trace = get_trace_manager()
+            trace.record_event(
+                event_type="tool_result",
+                node_name="tavily_api_search",
+                agent_type="researcher",
+                researcher_id=trace_researcher_id,
+                details={
+                    "call_id": search_call_id,
+                    "phase": "tavily_api_call",
+                    "num_results": sum(len(r.get('results', [])) for r in search_results),
+                }
+            )
+        except Exception:
+            pass
     
     # Step 2: Deduplicate results by URL to avoid processing the same content multiple times
     unique_results = {}
@@ -80,6 +135,26 @@ async def tavily_search(
             if url not in unique_results:
                 unique_results[url] = {**result, "query": response['query']}
     
+    # Record trace: Summarization phase start
+    if DebugConfig.TRACE_ENABLED:
+        try:
+            trace = get_trace_manager()
+            trace.record_event(
+                event_type="tool_call",
+                node_name="tavily_summarization",
+                agent_type="researcher",
+                researcher_id=trace_researcher_id,
+                details={
+                    "call_id": search_call_id,
+                    "phase": "summarization",
+                    "num_unique_results": len(unique_results),
+                }
+            )
+        except Exception:
+            pass
+
+
+
     # Step 3: Set up the summarization model with configuration
     configurable = Configuration.from_runnable_config(config)
     
@@ -119,6 +194,26 @@ async def tavily_search(
     
     # Step 5: Execute all summarization tasks in parallel
     summaries = await asyncio.gather(*summarization_tasks)
+
+    # Record trace: Summarization phase end
+    if DebugConfig.TRACE_ENABLED:
+        try:
+            trace = get_trace_manager()
+            trace.record_event(
+                event_type="tool_result",
+                node_name="tavily_summarization",
+                agent_type="researcher",
+                researcher_id=trace_researcher_id,
+                details={
+                    "call_id": search_call_id,
+                    "phase": "summarization",
+                    "num_summaries": len([s for s in summaries if s is not None]),
+                }
+            )
+        except Exception:
+            pass
+
+
     
     # Step 6: Combine results with their summaries
     summarized_results = {
@@ -145,6 +240,7 @@ async def tavily_search(
         formatted_output += "\n\n" + "-" * 80 + "\n"
     
     return formatted_output
+
 
 ARXIV_SEARCH_DESCRIPTION = (
     "A search engine for academic papers on arXiv. "
